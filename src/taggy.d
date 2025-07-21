@@ -4,6 +4,8 @@ import etc.c.sqlite3;
 import std.getopt;
 import std.process;
 
+string TAGS_TABLE = "tags";
+
 int main(string[] args) {
     bool daemon_mode = false;
     getopt(args, "daemon", &daemon_mode);
@@ -47,6 +49,17 @@ int main(string[] args) {
         null);
     scope(exit) sqlite3_close(database_connection);
 
+    string init_query_string = "select name from " ~ TAGS_TABLE;
+    const(char*) init_query = cast(const(char*)) init_query_string;
+    const(char*) sink = cast(const(char*)) new char[255];
+    sqlite3_stmt *init;
+    auto init_code = sqlite3_prepare(
+        database_connection,
+        init_query,
+        cast(int)init_query_string.length+1,
+        &init,
+        &sink
+    );
 
     if( open_code ) {
         stderr.writef("Unable to open the sqlite database; error code : %s\n", open_code);
@@ -64,3 +77,29 @@ enum RETURN_CODES {
     NO_HOME_ENV_VARIABLE,
     NO_USERNAME_ENV_VARIABLE,
 }
+ /*
+ database schema
+ tables:
+     tags:
+         -name:varchar[255]
+         -description:string
+     elements:
+         -hash-id:int
+         -value:string
+     tags-elements:
+         -tag-id:int
+         -elements-id:int
+     taggroup:
+         -group-id:int    # indexes into the tags id
+         -tag-id:int
+     properties
+         -property:enum
+         -pervasive-default:bool
+     properties-tags
+         -property-id:int
+         -tag-id:int
+         -pervasive:?bool    # if pervasive is true a tag witht the property can only get associated with an element that has that property; to decide if opposite should be true as well
+     properties-elements:
+         -property-id:int
+         -elements-id:int
+ */
