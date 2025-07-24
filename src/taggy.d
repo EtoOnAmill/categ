@@ -79,7 +79,7 @@ int select(sqlite3* database, Table table, string[] fields, string[] filter, sql
     ~ fields.join(",")
     ~ " FROM "
     ~ table
-    ~ "WHERE "
+    ~ " WHERE "
     ~ filter.join(",")
     ~ ";";
     const(char*) query = cast(const(char*)) query_string;
