@@ -4,8 +4,6 @@ import etc.c.sqlite3;
 import std.getopt;
 import std.process;
 
-string TAGS_TABLE = "tags";
-
 int main(string[] args) {
     bool daemon_mode = false;
     getopt(args, "daemon", &daemon_mode);
@@ -15,7 +13,7 @@ int main(string[] args) {
         default_dir = "/var/local/taggy";
     } else {
         string home_dir = environment.get("HOME");
-        if(home_dir == "") { return RETURN_CODES.NO_HOME_ENV_VARIABLE; }
+        if(home_dir == "") { return Return_codes.NO_HOME_ENV_VARIABLE; }
         default_dir = home_dir ~ "/.local/taggy";
     }
 
@@ -27,17 +25,17 @@ int main(string[] args) {
         }
         catch (Exception e) {
             stderr.writef("Unable to create directory %s\n", taggy_dir);
-            return RETURN_CODES.UNABLE_TO_CREATE_TAGGY_DIR;
+            return Return_codes.UNABLE_TO_CREATE_TAGGY_DIR;
         }
     }
 
     if( !isDir(taggy_dir) ) {
         stderr.writef("%s is not a directory\n", taggy_dir);
-        return RETURN_CODES.TAGGY_DIR_NOT_A_DIR;
+        return Return_codes.TAGGY_DIR_NOT_A_DIR;
     }
 
     string username = environment.get("USER");
-    if(username == "") { return RETURN_CODES.NO_USERNAME_ENV_VARIABLE; }
+    if(username == "") { return Return_codes.NO_USERNAME_ENV_VARIABLE; }
 
     string database_name = taggy_dir ~ "/" ~ username ~ ".db";
     writeln("Opening database ", database_name);
@@ -49,11 +47,11 @@ int main(string[] args) {
         null);
     scope(exit) sqlite3_close(database_connection);
 
-    string init_query_string = "select name from " ~ TAGS_TABLE;
+    string init_query_string = "select value from " ~ Tables.config ~ "WHERE setting=\"taggy-version\"";
     const(char*) init_query = cast(const(char*)) init_query_string;
     const(char*) sink = cast(const(char*)) new char[255];
     sqlite3_stmt *init;
-    auto init_code = sqlite3_prepare(
+    auto init_code = sqlite3_prepare_v2(
         database_connection,
         init_query,
         cast(int)init_query_string.length+1,
@@ -62,14 +60,14 @@ int main(string[] args) {
     );
 
     if( open_code ) {
-        stderr.writef("Unable to open the sqlite database; error code : %s\n", open_code);
-        return RETURN_CODES.UNABLE_TO_CREATE_TAGGY_DB;
+        stderr.writef("Unable to open the sqlite database; Sqlite3 error code : %s\n", open_code);
+        return Return_codes.UNABLE_TO_CREATE_TAGGY_DB;
     }
 
-    return RETURN_CODES.OK;
+    return Return_codes.OK;
 }
 
-enum RETURN_CODES {
+enum Return_codes {
     OK,
     UNABLE_TO_CREATE_TAGGY_DIR,
     UNABLE_TO_CREATE_TAGGY_DB,
@@ -77,6 +75,52 @@ enum RETURN_CODES {
     NO_HOME_ENV_VARIABLE,
     NO_USERNAME_ENV_VARIABLE,
 }
+
+enum Tables {
+    tags = "tags",
+    config = "configuration",
+    elements = "elements",
+    tags_elements = "tags_elements",
+    taggroup = "taggroup",
+    properties = "properties",
+    properties_tags = "properties_tags",
+    properties_elements = "properties_elements",
+}
+
+enum Tags_field {
+    name = "name",
+    description = "description",
+}
+enum Elements_field {
+   hash_id = "hash_id" ,
+   value = "value" ,
+}
+enum Tags_elements_field {
+   tag_id = "tag_id" ,
+   elements_id = "elements_id" ,
+}
+enum Taggroup_field {
+   group_id = "group_id" ,
+   tag_id = "tag_id" ,
+}
+enum Properties_field {
+   property = "property" ,
+}
+enum Properties_tags_field {
+   property_id = "property_id" ,
+   tag_id = "tag_id" ,
+   pervasive = "pervasive" ,
+}
+enum Properties_elements_field {
+   property_id = "property_id" ,
+   elements_id = "elements_id" ,
+}
+enum Configurations_field {
+   setting = "setting" ,
+   value = "value" ,
+   description = "description" ,
+}
+
  /*
  database schema
  tables:
@@ -94,12 +138,15 @@ enum RETURN_CODES {
          -tag-id:int
      properties
          -property:enum
-         -pervasive-default:bool
      properties-tags
          -property-id:int
          -tag-id:int
-         -pervasive:?bool    # if pervasive is true a tag witht the property can only get associated with an element that has that property; to decide if opposite should be true as well
+         -pervasive:bool    # if pervasive is true a tag witht the property can only get associated with an element that has that property; to be dicided if opposite should be true as well
      properties-elements:
          -property-id:int
          -elements-id:int
- */
+     configurations:
+         -setting:varchar[64]
+         -value:varchar[64]
+         -description:string
+*/
