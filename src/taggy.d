@@ -1,4 +1,5 @@
 import std.stdio;
+import std.array;
 import std.file;
 import etc.c.sqlite3;
 import std.getopt;
@@ -47,25 +48,53 @@ int main(string[] args) {
         null);
     scope(exit) sqlite3_close(database_connection);
 
-    string init_query_string = "select value from " ~ Tables.config ~ "WHERE setting=\"taggy-version\"";
-    const(char*) init_query = cast(const(char*)) init_query_string;
-    const(char*) sink = cast(const(char*)) new char[255];
-    sqlite3_stmt *init;
-    auto init_code = sqlite3_prepare_v2(
-        database_connection,
-        init_query,
-        cast(int)init_query_string.length+1,
-        &init,
-        &sink
-    );
-
     if( open_code ) {
         stderr.writef("Unable to open the sqlite database; Sqlite3 error code : %s\n", open_code);
         return Return_codes.UNABLE_TO_CREATE_TAGGY_DB;
     }
 
+    sqlite3_stmt* db_version;
+    int select_code =
+    select(
+        database_connection,
+        Table.config,
+        [Configurations_field.setting, Configurations_field.value],
+        [Configurations_field.setting ~ "='version'"],
+        db_version
+    );
+
+    if( select_code ) {
+        // TODO make the fucking tables cause if this don't work the db is emptyyyyyyyy
+        stderr.writef("Unable to execute query: sqlite3_prepare_v2 code : %s\n", select_code);
+        return Return_codes.QUERY_FAILED;
+    }
+
     return Return_codes.OK;
 }
+
+
+int select(sqlite3* database, Table table, string[] fields, string[] filter, sqlite3_stmt* query_stmt) {
+    string query_string =
+    "SELECT "
+    ~ fields.join(",")
+    ~ " FROM "
+    ~ table
+    ~ "WHERE "
+    ~ filter.join(",")
+    ~ ";";
+    const(char*) query = cast(const(char*)) query_string;
+
+    int prepare_code = sqlite3_prepare_v2(
+        database,
+        query,
+        cast(int)query_string.length+1,
+        &query_stmt,
+        null
+    );
+
+    return prepare_code;
+}
+
 
 enum Return_codes {
     OK,
@@ -74,9 +103,10 @@ enum Return_codes {
     TAGGY_DIR_NOT_A_DIR,
     NO_HOME_ENV_VARIABLE,
     NO_USERNAME_ENV_VARIABLE,
+    QUERY_FAILED,
 }
 
-enum Tables {
+enum Table {
     tags = "tags",
     config = "configuration",
     elements = "elements",
