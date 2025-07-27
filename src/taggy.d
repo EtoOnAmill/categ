@@ -1,4 +1,5 @@
 import std.stdio;
+import std.conv;
 import std.string;
 import std.array;
 import std.algorithm;
@@ -9,20 +10,20 @@ import std.process;
 
 const(string) DATABASE_VERSION = "0.0.1";
 
-/*
-add
-delete
-tag
-*/
 int main(string[] args) {
+    arraySep = ",";
+
     bool daemon_mode = false;
     string[] tags;
-    string[] elements;
+    string action;
     getopt(args,
-           "daemon", &daemon_mode,
-           "t", &tags,
-           "e", &elements,
+           std.getopt.config.passThrough,
+           "daemon|d", &daemon_mode,
+           "tags|t", &tags,
+           "action|a", &action,
     );
+    string[] elements = get_elements(args);
+
 
     string default_dir;
     if(daemon_mode) {
@@ -86,11 +87,8 @@ int main(string[] args) {
     if( select_code ) {
         sqlite3_finalize(db_version);
 
-        stderr.writef("Unable to query database version : sqlite3_prepare_v2 code : %s\n", select_code);
-
         int create_code = create_table(database_connection, Table.config);
         if ( create_code ) {
-            stderr.writef("Unable to create configuration table : sqlite3_exec code : %s\n", create_code);
             return Return_codes.QUERY_FAILED;
         }
 
@@ -100,7 +98,6 @@ int main(string[] args) {
             [ Configuration_field.setting, Configuration_field.value ],
             [[ "version".quote, DATABASE_VERSION.quote ]]);
         if ( insert_code ) {
-            stderr.writef("Unable to add version to database : sqlite3_exec code : %s\n", insert_code);
             return Return_codes.QUERY_FAILED;
         }
     }
@@ -115,9 +112,81 @@ int main(string[] args) {
     }
 
     const(char)* current_version = sqlite3_column_text(db_version, 0);
-    writeln("Current database version is ", current_version.fromStringz);
+    if( current_version.fromStringz != DATABASE_VERSION.fromStringz ) {
+        stderr.writef("Incompatible database versions %s %s\n TODO make documentation for migration",current_version, DATABASE_VERSION);
+        return Return_codes.DATABASE_ERROR;
+    }
+    sqlite3_finalize(db_version);
 
+
+/*
+actions:
+    Add    # if only tag or elements defined add each to relative database, if both present also add a connection for every tag to every element mentioned, default action when not defined
+    Delete # remove the elements or tags or remove the connection of tag and element if both are defined
+    Group  # similar to add but both tags and elements must be defined, the elements are tags as well
+*/
+    char action_short = 'a';
+    if(action.length != 0) { action_short = action[0]; }
+    switch (action_short) {
+        case 'D': case 'd':
+            assert(0, "TODO");
+            break;
+
+        case 'G': case 'g':
+            assert(0, "TODO");
+            break;
+
+        case 'A': case 'a':
+            int insert_code;
+            if(tags.length > 0) {
+                insert_code =
+                insert_values(
+                    database_connection,
+                    Table.tags,
+                    [Tag_field.name],
+                    tags.map!( e => [ e.quote ] ).array);
+                if( insert_code ) {
+                    stderr.writef("Unable to add tags to database\n");
+                    return Return_codes.DATABASE_ERROR;
+                }
+            }
+            if(elements.length > 0) {
+                insert_code =
+                insert_values(
+                    database_connection,
+                    Table.elements,
+                    [Element_field.value, Element_field.hash_id],
+                    elements.map!( e => [ e.quote, e.hashOf.text ] ).array);
+                if( insert_code ) {
+                    stderr.writef("Unable to add elements to database\n");
+                    return Return_codes.DATABASE_ERROR;
+                }
+            }
+            if(tags.length > 0 && elements.length > 0) {
+                assert(0, "TODO");
+            }
+            break;
+
+        default:
+            string[] available_actions = ["Add","Delete","Group"];
+            stderr.writef(
+                "Wrong action parameter, expected either %s but found %s\n",
+                available_actions,
+                action
+            );
+            return Return_codes.WRONG_ARGUMENTS;
+    }
+
+    writeln("With Action \t\t", action);
+    writeln("With tags \t\t", tags);
+    writeln("To elements \t\t", elements);
+    
     return Return_codes.OK;
+}
+
+string[] get_elements(string[] leftover_args) {
+    // TODO: if leftover args is empty get the elements from stdin
+    return leftover_args[1..$];
 }
 
 string quote(string to) {
@@ -134,7 +203,25 @@ int insert_values(sqlite3* database, Table table, string[] fields, string[][] va
     ~ values.map!( vals => "(" ~ vals.join(",") ~ ")" ).join(",");
 
     writeln(query_string);
-    return sqlite3_exec(database, query_string.toStringz, null, null, null);
+
+    int code =sqlite3_exec(database, query_string.toStringz, null, null, null);
+
+    switch(code) {
+        case 0: break;
+        case 19:
+            stderr.writef(
+                "Insertion failed because of constraint, possibly one or more tags already exist");
+            break;
+        default:
+            stderr.writef(
+                "Insertion into %s table failed; sqlite3_exec code %s\n",
+                table,
+                code
+            );
+        break;
+    }
+
+    return code;
 }
 
 int create_table(sqlite3* database, Table table) {
@@ -142,16 +229,22 @@ int create_table(sqlite3* database, Table table) {
 
     final switch( table ) {
         case Table.tags :
-            fields ~= Tag_field.name ~ " TEXT UNIQUE";
+            fields ~= Tag_field.name ~ " TEXT";
             fields ~= Tag_field.description ~ " TEXT";
+            fields ~= Tag_field.hash_id ~ " INTEGER PRIMARY KEY"; // hash of both name and description
             break;
         case Table.elements :
-            fields ~= Element_field.hash_id ~ " INTEGER UNIQUE";
             fields ~= Element_field.value ~ " TEXT";
+            fields ~= Element_field.description ~ " TEXT";
+            fields ~= Element_field.hash_id ~ " INTEGER PRIMARY KEY";
             break;
         case Table.tags_elements :
-            fields ~= Tag_element_field.tag_id ~ " INTEGER";
-            fields ~= Tag_element_field.elements_id ~ " INTEGER";
+            fields ~= text(
+                Tag_element_field.tag_id, " INTEGER ",
+                " REFERENCES ", Table.tags, "(", Tag_field.hash_id,") ON DELETE NO ACTION" );
+            fields ~= text(
+                Tag_element_field.elements_id, " INTEGER ",
+                " REFERENCES ", Table.elements, "( hash_id ) ON DELETE NO ACTION ON UPDATE CASCADE" );
             break;
         case Table.taggroup :
             fields ~= Taggroup_field.group_id ~ " INTEGER";
@@ -161,7 +254,7 @@ int create_table(sqlite3* database, Table table) {
             fields ~= Property_field.property ~ " TEXT";
             break;
         case Table.properties_tags :
-            fields ~= Property_tag_field.property_id ~ " INTEGER";
+           fields ~= Property_tag_field.property_id ~ " INTEGER";
             fields ~= Property_tag_field.tag_id ~ " INTEGER";
             fields ~= Property_tag_field.pervasive ~ " INTEGER";
             break;
@@ -170,7 +263,7 @@ int create_table(sqlite3* database, Table table) {
             fields ~= Property_element_field.elements_id ~ " INTEGER";
             break;
         case Table.config :
-            fields ~= Configuration_field.setting ~ " TEXT UNIQUE";
+            fields ~= Configuration_field.setting ~ " TEXT UNIQUE ON CONFLICT FAIL";
             fields ~= Configuration_field.value ~ " TEXT";
             fields ~= Configuration_field.description ~ " TEXT";
             break;
@@ -193,6 +286,14 @@ int create_table(sqlite3* database, Table table) {
         null // error message string pointer
     );
 
+    if( create_code ) {
+        stderr.writef(
+            "Creation of %s table failed; sqlite3_exec code : %s\n",
+            table,
+            create_code
+        );
+    }
+
     return create_code;
 }
 
@@ -214,6 +315,14 @@ int select(sqlite3* database, Table table, string[] fields, string[] filter, sql
         null
     );
 
+    if( prepare_code ) {
+        stderr.writef(
+            "Selection into %s failed; sqlite3_prepare_v2 code : %s\n",
+            table,
+            prepare_code
+        );
+    }
+
     return prepare_code;
 }
 
@@ -232,10 +341,12 @@ enum Table {
 enum Tag_field {
     name = "name",
     description = "description",
+    hash_id = "hash_id",
 }
 enum Element_field {
-   hash_id = "hash_id" ,
    value = "value" ,
+   description = "description",
+   hash_id = "hash_id" ,
 }
 enum Tag_element_field {
    tag_id = "tag_id" ,
@@ -303,4 +414,5 @@ enum Return_codes {
     NO_USERNAME_ENV_VARIABLE,
     QUERY_FAILED,
     QUERY_CREATION_FAILED,
+    WRONG_ARGUMENTS,
 }
