@@ -1,13 +1,28 @@
 import std.stdio;
+import std.string;
 import std.array;
+import std.algorithm;
 import std.file;
 import etc.c.sqlite3;
 import std.getopt;
 import std.process;
 
+const(string) DATABASE_VERSION = "0.0.1";
+
+/*
+add
+delete
+tag
+*/
 int main(string[] args) {
     bool daemon_mode = false;
-    getopt(args, "daemon", &daemon_mode);
+    string[] tags;
+    string[] elements;
+    getopt(args,
+           "daemon", &daemon_mode,
+           "t", &tags,
+           "e", &elements,
+    );
 
     string default_dir;
     if(daemon_mode) {
@@ -37,12 +52,17 @@ int main(string[] args) {
 
     string username = environment.get("USER");
     if(username == "") { return Return_codes.NO_USERNAME_ENV_VARIABLE; }
-
     string database_name = taggy_dir ~ "/" ~ username ~ ".db";
+
+
+
+
+
     writeln("Opening database ", database_name);
     sqlite3 * database_connection;
+
     auto open_code = sqlite3_open_v2(
-        cast(const(char*))database_name,
+        database_name.toStringz,
         &database_connection,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
         null);
@@ -58,37 +78,139 @@ int main(string[] args) {
     select(
         database_connection,
         Table.config,
-        [Configurations_field.setting, Configurations_field.value],
-        [Configurations_field.setting ~ "='version'"],
-        db_version
+        [Configuration_field.value],
+        [Configuration_field.setting ~ "=\"version\""],
+        &db_version
     );
 
     if( select_code ) {
-        // TODO make the fucking tables cause if this don't work the db is emptyyyyyyyy
-        stderr.writef("Unable to execute query: sqlite3_prepare_v2 code : %s\n", select_code);
-        return Return_codes.QUERY_FAILED;
+        sqlite3_finalize(db_version);
+
+        stderr.writef("Unable to query database version : sqlite3_prepare_v2 code : %s\n", select_code);
+
+        int create_code = create_table(database_connection, Table.config);
+        if ( create_code ) {
+            stderr.writef("Unable to create configuration table : sqlite3_exec code : %s\n", create_code);
+            return Return_codes.QUERY_FAILED;
+        }
+
+        int insert_code = insert_values(
+            database_connection,
+            Table.config,
+            [ Configuration_field.setting, Configuration_field.value ],
+            [[ "version".quote, DATABASE_VERSION.quote ]]);
+        if ( insert_code ) {
+            stderr.writef("Unable to add version to database : sqlite3_exec code : %s\n", insert_code);
+            return Return_codes.QUERY_FAILED;
+        }
     }
+
+    if(db_version == null) {assert(0, "wtf");}
+    int db_vers_code = sqlite3_step(db_version);
+    if ( db_vers_code != SQLITE_ROW ) {
+        sqlite3_finalize(db_version);
+
+        stderr.writef("Configuration table is corrupted, unable to get database version; sqlite3_step code : %s\n", db_vers_code);
+        return Return_codes.DATABASE_ERROR;
+    }
+
+    const(char)* current_version = sqlite3_column_text(db_version, 0);
+    writeln("Current database version is ", current_version.fromStringz);
 
     return Return_codes.OK;
 }
 
+string quote(string to) {
+    return '"' ~ to ~ '"';
+}
 
-int select(sqlite3* database, Table table, string[] fields, string[] filter, sqlite3_stmt* query_stmt) {
+int insert_values(sqlite3* database, Table table, string[] fields, string[][] values) {
+    string query_string =
+    "INSERT INTO "
+    ~ table
+    ~ " ( "
+    ~ fields.join(",")
+    ~ " ) VALUES "
+    ~ values.map!( vals => "(" ~ vals.join(",") ~ ")" ).join(",");
+
+    writeln(query_string);
+    return sqlite3_exec(database, query_string.toStringz, null, null, null);
+}
+
+int create_table(sqlite3* database, Table table) {
+    string[] fields = [];
+
+    final switch( table ) {
+        case Table.tags :
+            fields ~= Tag_field.name ~ " TEXT UNIQUE";
+            fields ~= Tag_field.description ~ " TEXT";
+            break;
+        case Table.elements :
+            fields ~= Element_field.hash_id ~ " INTEGER UNIQUE";
+            fields ~= Element_field.value ~ " TEXT";
+            break;
+        case Table.tags_elements :
+            fields ~= Tag_element_field.tag_id ~ " INTEGER";
+            fields ~= Tag_element_field.elements_id ~ " INTEGER";
+            break;
+        case Table.taggroup :
+            fields ~= Taggroup_field.group_id ~ " INTEGER";
+            fields ~= Taggroup_field.tag_id ~ " INTEGER";
+            break;
+        case Table.properties :
+            fields ~= Property_field.property ~ " TEXT";
+            break;
+        case Table.properties_tags :
+            fields ~= Property_tag_field.property_id ~ " INTEGER";
+            fields ~= Property_tag_field.tag_id ~ " INTEGER";
+            fields ~= Property_tag_field.pervasive ~ " INTEGER";
+            break;
+        case Table.properties_elements :
+            fields ~= Property_element_field.property_id ~ " INTEGER";
+            fields ~= Property_element_field.elements_id ~ " INTEGER";
+            break;
+        case Table.config :
+            fields ~= Configuration_field.setting ~ " TEXT UNIQUE";
+            fields ~= Configuration_field.value ~ " TEXT";
+            fields ~= Configuration_field.description ~ " TEXT";
+            break;
+    }
+
+    string query_string =
+    "CREATE TABLE IF NOT EXISTS "
+    ~ table
+    ~ " ( "
+    ~ fields.join(" , ")
+    ~ " )";
+
+    writeln(query_string);
+    int create_code =
+    sqlite3_exec(
+        database,
+        query_string.toStringz,
+        null, // callback function
+        null, // first arg to callback function
+        null // error message string pointer
+    );
+
+    return create_code;
+}
+
+int select(sqlite3* database, Table table, string[] fields, string[] filter, sqlite3_stmt** sqlite_stmt) {
     string query_string =
     "SELECT "
     ~ fields.join(",")
     ~ " FROM "
     ~ table
     ~ " WHERE "
-    ~ filter.join(",")
-    ~ ";";
-    const(char*) query = cast(const(char*)) query_string;
+    ~ filter.join(",");
 
+    writeln(query_string);
     int prepare_code = sqlite3_prepare_v2(
         database,
-        query,
-        cast(int)query_string.length+1,
-        &query_stmt,
+        query_string.toStringz,
+        -1,
+        sqlite_stmt,
         null
     );
 
@@ -96,19 +218,9 @@ int select(sqlite3* database, Table table, string[] fields, string[] filter, sql
 }
 
 
-enum Return_codes {
-    OK,
-    UNABLE_TO_CREATE_TAGGY_DIR,
-    UNABLE_TO_CREATE_TAGGY_DB,
-    TAGGY_DIR_NOT_A_DIR,
-    NO_HOME_ENV_VARIABLE,
-    NO_USERNAME_ENV_VARIABLE,
-    QUERY_FAILED,
-}
-
 enum Table {
     tags = "tags",
-    config = "configuration",
+    config = "configurations",
     elements = "elements",
     tags_elements = "tags_elements",
     taggroup = "taggroup",
@@ -117,15 +229,15 @@ enum Table {
     properties_elements = "properties_elements",
 }
 
-enum Tags_field {
+enum Tag_field {
     name = "name",
     description = "description",
 }
-enum Elements_field {
+enum Element_field {
    hash_id = "hash_id" ,
    value = "value" ,
 }
-enum Tags_elements_field {
+enum Tag_element_field {
    tag_id = "tag_id" ,
    elements_id = "elements_id" ,
 }
@@ -133,19 +245,19 @@ enum Taggroup_field {
    group_id = "group_id" ,
    tag_id = "tag_id" ,
 }
-enum Properties_field {
+enum Property_field {
    property = "property" ,
 }
-enum Properties_tags_field {
+enum Property_tag_field {
    property_id = "property_id" ,
    tag_id = "tag_id" ,
    pervasive = "pervasive" ,
 }
-enum Properties_elements_field {
+enum Property_element_field {
    property_id = "property_id" ,
    elements_id = "elements_id" ,
 }
-enum Configurations_field {
+enum Configuration_field {
    setting = "setting" ,
    value = "value" ,
    description = "description" ,
@@ -164,14 +276,14 @@ enum Configurations_field {
          -tag-id:int
          -elements-id:int
      taggroup:
-         -group-id:int    # indexes into the tags id
+         -group-id:int
          -tag-id:int
      properties
          -property:enum
      properties-tags
          -property-id:int
          -tag-id:int
-         -pervasive:bool    # if pervasive is true a tag witht the property can only get associated with an element that has that property; to be dicided if opposite should be true as well
+         -pervasive:bool
      properties-elements:
          -property-id:int
          -elements-id:int
@@ -180,3 +292,15 @@ enum Configurations_field {
          -value:varchar[64]
          -description:string
 */
+
+enum Return_codes {
+    OK,
+    DATABASE_ERROR,
+    UNABLE_TO_CREATE_TAGGY_DIR,
+    UNABLE_TO_CREATE_TAGGY_DB,
+    TAGGY_DIR_NOT_A_DIR,
+    NO_HOME_ENV_VARIABLE,
+    NO_USERNAME_ENV_VARIABLE,
+    QUERY_FAILED,
+    QUERY_CREATION_FAILED,
+}
