@@ -20,7 +20,7 @@ int main(string[] args) {
            std.getopt.config.passThrough,
            "daemon|d", &daemon_mode,
            "tags|t", &tags,
-           "action|a", &action,
+           "operation|o", &action,
     );
     string[] elements = get_elements(args);
 
@@ -74,77 +74,123 @@ int main(string[] args) {
         return Return_codes.UNABLE_TO_CREATE_TAGGY_DB;
     }
 
-    sqlite3_stmt* db_version;
-    int select_code =
-    select(
-        database_connection,
-        Table.config,
-        [Configuration_field.value],
-        [Configuration_field.setting ~ "=\"version\""],
-        &db_version
-    );
+    if( table_exists(database_connection, Table.configurations) ) {
 
-    if( select_code ) {
-        sqlite3_finalize(db_version);
+        sqlite3_stmt* db_version;
+        int select_code =
+        select(
+            database_connection,
+            Table.configurations.to_table_expression,
+            [Configuration_field.value],
+            [Configuration_field.setting ~ "=\"version\""],
+            &db_version
+        );
+        if( select_code ) { return Return_codes.QUERY_FAILED; }
 
-        int create_code = create_table(database_connection, Table.config);
-        if ( create_code ) {
-            return Return_codes.QUERY_FAILED;
+        assert(db_version, "Database version query sould never be null and reach this point, FATAL ERROR\n");
+
+        int db_vers_code = sqlite3_step(db_version);
+        if ( db_vers_code != SQLITE_ROW ) {
+            sqlite3_finalize(db_version);
+
+            stderr.writef("Configuration table is corrupted, unable to get database version; sqlite3_step code : %s\n", db_vers_code);
+            return Return_codes.DATABASE_ERROR;
         }
 
+        const(char)* current_version = sqlite3_column_text(db_version, 0);
+        if( current_version.fromStringz != DATABASE_VERSION.fromStringz ) {
+            sqlite3_finalize(db_version);
+
+            stderr.writef("Incompatible database versions %s %s\n TODO make documentation for migration",current_version, DATABASE_VERSION);
+            return Return_codes.DATABASE_ERROR;
+        }
+        sqlite3_finalize(db_version);
+
+    } else {
+
+        int create_code = create_table(database_connection, Table.configurations);
+        if ( create_code ) { return Return_codes.QUERY_FAILED; }
         int insert_code = insert_values(
             database_connection,
-            Table.config,
+            Table.configurations,
             [ Configuration_field.setting, Configuration_field.value ],
-            [[ "version".quote, DATABASE_VERSION.quote ]]);
-        if ( insert_code ) {
-            return Return_codes.QUERY_FAILED;
-        }
+            [[ "version".quote_value, DATABASE_VERSION.quote_value ]]);
+        if ( insert_code ) { return Return_codes.QUERY_FAILED; }
     }
-
-    if(db_version == null) {assert(0, "wtf");}
-    int db_vers_code = sqlite3_step(db_version);
-    if ( db_vers_code != SQLITE_ROW ) {
-        sqlite3_finalize(db_version);
-
-        stderr.writef("Configuration table is corrupted, unable to get database version; sqlite3_step code : %s\n", db_vers_code);
-        return Return_codes.DATABASE_ERROR;
-    }
-
-    const(char)* current_version = sqlite3_column_text(db_version, 0);
-    if( current_version.fromStringz != DATABASE_VERSION.fromStringz ) {
-        stderr.writef("Incompatible database versions %s %s\n TODO make documentation for migration",current_version, DATABASE_VERSION);
-        return Return_codes.DATABASE_ERROR;
-    }
-    sqlite3_finalize(db_version);
+    assert( !init_table(database_connection, Table.tags) );
+    assert( !init_table(database_connection, Table.elements) );
+    assert( !init_table(database_connection, Table.tags_elements) );
 
 
+
+    writeln("With Action \t\t", action);
+    writeln("With tags \t\t", tags);
+    writeln("To elements \t\t", elements);
 /*
 actions:
     Add    # if only tag or elements defined add each to relative database, if both present also add a connection for every tag to every element mentioned, default action when not defined
     Delete # remove the elements or tags or remove the connection of tag and element if both are defined
     Group  # similar to add but both tags and elements must be defined, the elements are tags as well
+    List   # list elements with their associated tags or tags with their associated elements, if both are present idk
 */
-    char action_short = 'a';
-    if(action.length != 0) { action_short = action[0]; }
-    switch (action_short) {
-        case 'D': case 'd':
+    switch (action) {
+        case "Delete": case "D": case "d":
             assert(0, "TODO");
             break;
 
-        case 'G': case 'g':
+        case "Group": case "G": case "g":
             assert(0, "TODO");
             break;
 
-        case 'A': case 'a':
+        case "List": case "L": case "l":
+            if(tags.length > 0) {
+                TableExpression tag_join = table_join(
+                    Table.tags_elements.to_table_expression,
+                    Table.tags.to_table_expression,
+                    text(Tag_element_field.tag_id.full_name, "=", Tag_field.hash_id.full_name));
+                TableExpression element_tag_join = table_join(
+                    tag_join.quote_t_e("("),
+                    Table.elements.to_table_expression,
+                    text(Tag_element_field.element_id.full_name, "=", Element_field.hash_id.full_name));
+
+                sqlite3_stmt* stmt;
+                int code = select(
+                    database_connection,
+                    element_tag_join.quote_t_e("("),
+                    [Tag_field.name.full_name, Element_field.value.full_name],
+                    tags.map!(t => text(Tag_field.hash_id.full_name, "=", t.hashOf)).array,
+                    &stmt);
+
+                if( code ) {
+                    stderr.writef("Unable to create query for tag connections; sqlite3_prepare code : %s\n", code);
+                    return Return_codes.DATABASE_ERROR;
+                }
+                string[] tag;
+                string[] element;
+
+                while( sqlite3_step(stmt) == SQLITE_ROW ) {
+                    tag ~= sqlite3_column_text(stmt, 0).text;
+                    element ~= sqlite3_column_text(stmt, 1).text;
+                }
+
+                sqlite3_finalize(stmt);
+
+                for(int i = 0; i < tag.length; i++) {
+                    writeln(tag[i], " -> ", element[i]);
+                }
+            }
+            break;
+
+        case "Add": case "A": case "a":
+            writeln("ADDING with tags ", tags, " and elements ", elements);
             int insert_code;
             if(tags.length > 0) {
                 insert_code =
                 insert_values(
                     database_connection,
                     Table.tags,
-                    [Tag_field.name],
-                    tags.map!( e => [ e.quote ] ).array);
+                    [Tag_field.name, Tag_field.hash_id],
+                    tags.map!( e => [ e.quote_value, e.hashOf.text ] ).array);
                 if( insert_code ) {
                     stderr.writef("Unable to add tags to database\n");
                     return Return_codes.DATABASE_ERROR;
@@ -156,14 +202,26 @@ actions:
                     database_connection,
                     Table.elements,
                     [Element_field.value, Element_field.hash_id],
-                    elements.map!( e => [ e.quote, e.hashOf.text ] ).array);
+                    elements.map!( e => [ e.quote_value, e.hashOf.text ] ).array);
                 if( insert_code ) {
                     stderr.writef("Unable to add elements to database\n");
                     return Return_codes.DATABASE_ERROR;
                 }
             }
             if(tags.length > 0 && elements.length > 0) {
-                assert(0, "TODO");
+                foreach(element; elements) {
+                    insert_code =
+                    insert_values(
+                        database_connection,
+                        Table.tags_elements,
+                        [Tag_element_field.tag_id, Tag_element_field.element_id],
+                        tags.map!( e => [e.hashOf.text, element.hashOf.text] ).array,
+                    );
+                    if( insert_code ) {
+                        stderr.writef("Unable to tag %s element to tags %s\n", element, tags);
+                        return Return_codes.DATABASE_ERROR;
+                    }
+                }
             }
             break;
 
@@ -176,12 +234,22 @@ actions:
             );
             return Return_codes.WRONG_ARGUMENTS;
     }
-
-    writeln("With Action \t\t", action);
-    writeln("With tags \t\t", tags);
-    writeln("To elements \t\t", elements);
     
     return Return_codes.OK;
+}
+
+TableExpression table_join(TableExpression table_left, TableExpression table_right, string constraint) {
+    return cast(TableExpression)text(
+        table_left, " JOIN ", table_right,
+        " ON ", constraint
+    );
+}
+
+int init_table(sqlite3* database, Table table) {
+    if( table_exists(database, table) ) {
+        return create_table(database, table);
+    }
+    return SQLITE_OK;
 }
 
 string[] get_elements(string[] leftover_args) {
@@ -189,18 +257,25 @@ string[] get_elements(string[] leftover_args) {
     return leftover_args[1..$];
 }
 
-string quote(string to) {
-    return '"' ~ to ~ '"';
+string quote(string inner, string around) {
+    switch(around) {
+        case "(": return text( "(",inner,")");
+        default:
+            return text(around,inner,around);
+    }
+}
+string quote_value(string inner) {
+    return inner.quote("'");
 }
 
 int insert_values(sqlite3* database, Table table, string[] fields, string[][] values) {
-    string query_string =
-    "INSERT INTO "
-    ~ table
-    ~ " ( "
-    ~ fields.join(",")
-    ~ " ) VALUES "
-    ~ values.map!( vals => "(" ~ vals.join(",") ~ ")" ).join(",");
+    string query_string = text(
+    "INSERT INTO ",
+    table,
+    " ( ",
+    fields.join(","),
+    " ) VALUES ",
+    values.map!( vals => "(" ~ vals.join(",") ~ ")" ).join(","));
 
     writeln(query_string);
 
@@ -210,7 +285,7 @@ int insert_values(sqlite3* database, Table table, string[] fields, string[][] va
         case 0: break;
         case 19:
             stderr.writef(
-                "Insertion failed because of constraint, possibly one or more tags already exist");
+                "Insertion into %s table failed because of constraints\n", table);
             break;
         default:
             stderr.writef(
@@ -224,8 +299,33 @@ int insert_values(sqlite3* database, Table table, string[] fields, string[][] va
     return code;
 }
 
+bool table_exists(sqlite3* database, Table table) {
+    string query_string = text(
+        "SELECT count(*) FROM sqlite_master ",
+        "WHERE type='datbase' ",
+        "AND name='", table,"'");
+
+    sqlite3_stmt* stmt;
+    int prepare_code = sqlite3_prepare_v2(
+        database,
+        query_string.toStringz,
+        -1,
+        &stmt,
+        null);
+    assert(!prepare_code, "Failed to prepare query for checking database existance\n");
+
+    assert( sqlite3_step(stmt) == SQLITE_ROW, "Table existance query failed to execute" );
+
+    int res = sqlite3_column_int(stmt, 0);
+
+    sqlite3_finalize(stmt);
+
+    return !cast(bool) res;
+}
+
 int create_table(sqlite3* database, Table table) {
     string[] fields = [];
+    string constraints;
 
     final switch( table ) {
         case Table.tags :
@@ -241,12 +341,15 @@ int create_table(sqlite3* database, Table table) {
         case Table.tags_elements :
             fields ~= text(
                 Tag_element_field.tag_id, " INTEGER ",
-                " REFERENCES ", Table.tags, "(", Tag_field.hash_id,") ON DELETE NO ACTION" );
+                " REFERENCES ", Table.tags, "(", Tag_field.hash_id,") ON DELETE NO ACTION ON UPDATE CASCADE" );
             fields ~= text(
-                Tag_element_field.elements_id, " INTEGER ",
-                " REFERENCES ", Table.elements, "( hash_id ) ON DELETE NO ACTION ON UPDATE CASCADE" );
+                Tag_element_field.element_id, " INTEGER ",
+                " REFERENCES ", Table.elements, "(", Element_field.hash_id,") ON DELETE NO ACTION ON UPDATE CASCADE" );
+            constraints = text(
+                "UNIQUE(", Tag_element_field.tag_id, ",", Tag_element_field.element_id,")",
+                " ON CONFLICT IGNORE" );
             break;
-        case Table.taggroup :
+        case Table.taggroups :
             fields ~= Taggroup_field.group_id ~ " INTEGER";
             fields ~= Taggroup_field.tag_id ~ " INTEGER";
             break;
@@ -260,21 +363,24 @@ int create_table(sqlite3* database, Table table) {
             break;
         case Table.properties_elements :
             fields ~= Property_element_field.property_id ~ " INTEGER";
-            fields ~= Property_element_field.elements_id ~ " INTEGER";
+            fields ~= Property_element_field.element_id ~ " INTEGER";
             break;
-        case Table.config :
+        case Table.configurations :
             fields ~= Configuration_field.setting ~ " TEXT UNIQUE ON CONFLICT FAIL";
             fields ~= Configuration_field.value ~ " TEXT";
             fields ~= Configuration_field.description ~ " TEXT";
             break;
     }
 
-    string query_string =
-    "CREATE TABLE IF NOT EXISTS "
-    ~ table
-    ~ " ( "
-    ~ fields.join(" , ")
-    ~ " )";
+    string[] definitions;
+    if( constraints ) {
+        definitions = (fields ~ constraints);
+    } else {
+        definitions = fields;
+    }
+    string query_string = text(
+    "CREATE TABLE IF NOT EXISTS ", table,
+    " ( ", definitions.join(" , "), " )");
 
     writeln(query_string);
     int create_code =
@@ -297,14 +403,14 @@ int create_table(sqlite3* database, Table table) {
     return create_code;
 }
 
-int select(sqlite3* database, Table table, string[] fields, string[] filter, sqlite3_stmt** sqlite_stmt) {
-    string query_string =
-    "SELECT "
-    ~ fields.join(",")
-    ~ " FROM "
-    ~ table
-    ~ " WHERE "
-    ~ filter.join(",");
+int select(sqlite3* database, TableExpression table, string[] fields, string[] filter, sqlite3_stmt** sqlite_stmt) {
+    string query_string = text(
+    "SELECT ",
+    fields.join(","),
+    " FROM ",
+    table,
+    " WHERE ",
+    filter.join(" OR "));
 
     writeln(query_string);
     int prepare_code = sqlite3_prepare_v2(
@@ -327,52 +433,64 @@ int select(sqlite3* database, Table table, string[] fields, string[] filter, sql
 }
 
 
+struct TableExpression {
+    string val;
+    string toString() {
+        return this.val;
+    }
+    TableExpression quote_t_e(string outer) {
+        return TableExpression(quote(this.val,outer));
+    }
+}
+TableExpression to_table_expression(string t) {
+    return TableExpression(t);
+}
+
 enum Table {
     tags = "tags",
-    config = "configurations",
+    configurations = "configurations",
     elements = "elements",
     tags_elements = "tags_elements",
-    taggroup = "taggroup",
+    taggroups = "taggroups",
     properties = "properties",
     properties_tags = "properties_tags",
     properties_elements = "properties_elements",
 }
 
-enum Tag_field {
-    name = "name",
-    description = "description",
-    hash_id = "hash_id",
+
+mixin(Field!(Table.tags, "Tag_field",
+    "name", "description", "hash_id"));
+
+mixin(Field!(Table.elements, "Element_field",
+    "value", "description", "hash_id"));
+
+mixin(Field!(Table.tags_elements, "Tag_element_field",
+    "tag_id", "element_id" ));
+
+mixin(Field!(Table.taggroups, "Taggroup_field",
+    "group_id", "tag_id" ));
+
+mixin(Field!(Table.properties, "Property_field",
+    "property" ));
+
+mixin(Field!(Table.properties_tags, "Property_tag_field",
+    "property_id", "tag_id", "pervasive" ));
+
+mixin(Field!(Table.properties_elements, "Property_element_field",
+    "property_id", "element_id" ));
+
+mixin(Field!(Table.configurations, "Configuration_field",
+    "setting", "value", "description" ));
+
+template Field(Table table, string field_enum_name, fields...) {
+    const char[] Field = text(
+        "enum ", field_enum_name, "{",
+        [fields].map!(e => text(e,"=",e.quote("\""))).join(","),
+        "}\n",
+        "string full_name(", field_enum_name, " f) { return text(Table.", table, ", \".\", f); }" );
 }
-enum Element_field {
-   value = "value" ,
-   description = "description",
-   hash_id = "hash_id" ,
-}
-enum Tag_element_field {
-   tag_id = "tag_id" ,
-   elements_id = "elements_id" ,
-}
-enum Taggroup_field {
-   group_id = "group_id" ,
-   tag_id = "tag_id" ,
-}
-enum Property_field {
-   property = "property" ,
-}
-enum Property_tag_field {
-   property_id = "property_id" ,
-   tag_id = "tag_id" ,
-   pervasive = "pervasive" ,
-}
-enum Property_element_field {
-   property_id = "property_id" ,
-   elements_id = "elements_id" ,
-}
-enum Configuration_field {
-   setting = "setting" ,
-   value = "value" ,
-   description = "description" ,
-}
+
+
 
  /*
  database schema
