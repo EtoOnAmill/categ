@@ -135,8 +135,31 @@ actions:
 */
     switch (action) {
         case "Delete": case "D": case "d":
+            if(tags.length > 0 && elements.length > 0) {
+                string[] where;
+                foreach(t; tags) {
+                    foreach(e; elements) {
+                        where ~= text("(", Tag_element_field.tag_id, "=", t.hashOf,
+                        " AND ", Tag_element_field.element_id, "=", e.hashOf, ")");
+                    }
+                }
+
+                string string_query = text (
+                    "DELETE FROM ", Table.tags_elements,
+                    " WHERE ", where.join(" OR ")
+                );
+                writeln(string_query);
+
+                assert( !sqlite3_exec(
+                    database_connection,
+                    string_query.toStringz,
+                    null,
+                    null,
+                    null,
+                ), "Unable to remove tag link");
+                break;
+            }
             assert(0, "TODO");
-            break;
 
         case "Group": case "G": case "g":
             assert(0, "TODO");
@@ -178,6 +201,33 @@ actions:
                 for(int i = 0; i < tag.length; i++) {
                     writeln(tag[i], " -> ", element[i]);
                 }
+                break;
+            }
+
+            if(tags.length == 0 && elements.length == 0) {
+                sqlite3_stmt* stmt;
+                int code = select(
+                    database_connection,
+                    Table.tags.to_table_expression,
+                    [Tag_field.name, Tag_field.description],
+                    ["true"],
+                    &stmt );
+                if( code ) {
+                    stderr.writef("Unable to create query for tags; sqlite3_prepare code : %s\n", code);
+                    return Return_codes.DATABASE_ERROR;
+                }
+
+                string[] tag;
+                string[] desc;
+                while( sqlite3_step(stmt) == SQLITE_ROW ) {
+                    tag ~= sqlite3_column_text(stmt, 0).text;
+                    desc ~= sqlite3_column_text(stmt, 1).text;
+                }
+
+                for(int i = 0; i < tag.length; i++) {
+                    writeln(tag[i], " \"", desc[i], "\""); 
+                }
+                break;
             }
             break;
 
@@ -331,12 +381,12 @@ int create_table(sqlite3* database, Table table) {
         case Table.tags :
             fields ~= Tag_field.name ~ " TEXT";
             fields ~= Tag_field.description ~ " TEXT";
-            fields ~= Tag_field.hash_id ~ " INTEGER PRIMARY KEY"; // hash of both name and description
+            fields ~= Tag_field.hash_id ~ " INTEGER PRIMARY KEY ON CONFLICT IGNORE"; // hash of both name and description
             break;
         case Table.elements :
             fields ~= Element_field.value ~ " TEXT";
             fields ~= Element_field.description ~ " TEXT";
-            fields ~= Element_field.hash_id ~ " INTEGER PRIMARY KEY";
+            fields ~= Element_field.hash_id ~ " INTEGER PRIMARY KEY ON CONFLICT IGNORE";
             break;
         case Table.tags_elements :
             fields ~= text(
