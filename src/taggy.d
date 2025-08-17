@@ -10,6 +10,7 @@ import std.process;
 
 const(string) DATABASE_VERSION = "0.0.1";
 
+bool deebug = false;
 int main(string[] args) {
     arraySep = ",";
 
@@ -21,6 +22,7 @@ int main(string[] args) {
            "daemon|d", &daemon_mode,
            "tags|t", &tags,
            "operation|o", &action,
+           "debug", &deebug,
     );
     string[] elements = get_elements(args);
 
@@ -59,7 +61,7 @@ int main(string[] args) {
 
 
 
-    writeln("Opening database ", database_name);
+    deebug_w("Opening database ", database_name);
     sqlite3 * database_connection;
 
     auto open_code = sqlite3_open_v2(
@@ -123,9 +125,9 @@ int main(string[] args) {
 
 
 
-    writeln("With Action \t\t", action);
-    writeln("With tags \t\t", tags);
-    writeln("To elements \t\t", elements);
+    deebug_w("With Action \t\t", action);
+    deebug_w("With tags \t\t", tags.text);
+    deebug_w("To elements \t\t", elements.text);
 /*
 actions:
     Add    # if only tag or elements defined add each to relative database, if both present also add a connection for every tag to every element mentioned, default action when not defined
@@ -134,7 +136,7 @@ actions:
     List   # list elements with their associated tags or tags with their associated elements, if both are present idk
 */
     switch (action) {
-        case "Delete": case "D": case "d":
+        case "Untag": case "U": case "u":
             if(tags.length > 0 && elements.length > 0) {
                 string[] where;
                 foreach(t; tags) {
@@ -148,7 +150,7 @@ actions:
                     "DELETE FROM ", Table.tags_elements,
                     " WHERE ", where.join(" OR ")
                 );
-                writeln(string_query);
+                deebug_w(string_query);
 
                 assert( !sqlite3_exec(
                     database_connection,
@@ -158,7 +160,11 @@ actions:
                     null,
                 ), "Unable to remove tag link");
                 break;
+            } else {
+                assert(0, "TODO");
             }
+        case "Delete": case "D": case "d":
+
             assert(0, "TODO");
 
         case "Group": case "G": case "g":
@@ -176,30 +182,58 @@ actions:
                     Table.elements.to_table_expression,
                     text(Tag_element_field.element_id.full_name, "=", Element_field.hash_id.full_name));
 
-                sqlite3_stmt* stmt;
-                int code = select(
-                    database_connection,
-                    element_tag_join.quote_t_e("("),
-                    [Tag_field.name.full_name, Element_field.value.full_name],
-                    tags.map!(t => text(Tag_field.hash_id.full_name, "=", t.hashOf)).array,
-                    &stmt);
+                foreach(t; tags) {
+                    sqlite3_stmt* stmt;
+                    int code = select(
+                        database_connection,
+                        element_tag_join.quote_t_e("("),
+                        [Tag_field.name.full_name, Element_field.value.full_name],
+                        [text(Tag_element_field.tag_id, "=", t.hashOf)],
+                        &stmt);
+                    if( code ) {
+                        stderr.writef("Unable to create query for tag connections; sqlite3_prepare code : %s\n", code);
+                        return Return_codes.DATABASE_ERROR;
+                    }
 
-                if( code ) {
-                    stderr.writef("Unable to create query for tag connections; sqlite3_prepare code : %s\n", code);
-                    return Return_codes.DATABASE_ERROR;
+                    writeln(t, ":");
+                    while( sqlite3_step(stmt) == SQLITE_ROW ) {
+                        writeln("\t", sqlite3_column_text(stmt, 1).text);
+                    }
+                    writeln();
+
+                    sqlite3_finalize(stmt);
                 }
-                string[] tag;
-                string[] element;
+                break;
+            } else if ( elements.length > 0 ) {
+                TableExpression tag_join = table_join(
+                    Table.tags_elements.to_table_expression,
+                    Table.tags.to_table_expression,
+                    text(Tag_element_field.tag_id.full_name, "=", Tag_field.hash_id.full_name));
+                TableExpression element_tag_join = table_join(
+                    tag_join.quote_t_e("("),
+                    Table.elements.to_table_expression,
+                    text(Tag_element_field.element_id.full_name, "=", Element_field.hash_id.full_name));
 
-                while( sqlite3_step(stmt) == SQLITE_ROW ) {
-                    tag ~= sqlite3_column_text(stmt, 0).text;
-                    element ~= sqlite3_column_text(stmt, 1).text;
-                }
+                foreach(e; elements) {
+                    sqlite3_stmt* stmt;
+                    int code = select(
+                        database_connection,
+                        element_tag_join.quote_t_e("("),
+                        [Tag_field.name.full_name, Element_field.value.full_name],
+                        [text(Tag_element_field.element_id, "=", e.hashOf)],
+                        &stmt);
+                    if( code ) {
+                        stderr.writef("Unable to create query for elements tag; sqlite3_prepare code : %s\n", code);
+                        return Return_codes.DATABASE_ERROR;
+                    }
 
-                sqlite3_finalize(stmt);
+                    writeln(e, " <-");
+                    while( sqlite3_step(stmt) == SQLITE_ROW ) {
+                        writeln("\t", sqlite3_column_text(stmt, 0).text);
+                    }
+                    writeln();
 
-                for(int i = 0; i < tag.length; i++) {
-                    writeln(tag[i], " -> ", element[i]);
+                    sqlite3_finalize(stmt);
                 }
                 break;
             }
@@ -225,14 +259,15 @@ actions:
                 }
 
                 for(int i = 0; i < tag.length; i++) {
-                    writeln(tag[i], " \"", desc[i], "\""); 
+                    string t = desc[i] != "" ? text( " \"", desc[i], "\"") : "";
+                    writeln(tag[i], t); 
                 }
                 break;
             }
             break;
 
         case "Add": case "A": case "a":
-            writeln("ADDING with tags ", tags, " and elements ", elements);
+            deebug_w("ADDING with tags ", tags.text, " and elements ", elements.text);
             int insert_code;
             if(tags.length > 0) {
                 insert_code =
@@ -276,7 +311,7 @@ actions:
             break;
 
         default:
-            string[] available_actions = ["Add","Delete","Group"];
+            string[] available_actions = ["Add","Delete","Group","List"];
             stderr.writef(
                 "Wrong action parameter, expected either %s but found %s\n",
                 available_actions,
@@ -327,7 +362,7 @@ int insert_values(sqlite3* database, Table table, string[] fields, string[][] va
     " ) VALUES ",
     values.map!( vals => "(" ~ vals.join(",") ~ ")" ).join(","));
 
-    writeln(query_string);
+    deebug_w(query_string);
 
     int code =sqlite3_exec(database, query_string.toStringz, null, null, null);
 
@@ -407,7 +442,7 @@ int create_table(sqlite3* database, Table table) {
             fields ~= Property_field.property ~ " TEXT";
             break;
         case Table.properties_tags :
-           fields ~= Property_tag_field.property_id ~ " INTEGER";
+            fields ~= Property_tag_field.property_id ~ " INTEGER";
             fields ~= Property_tag_field.tag_id ~ " INTEGER";
             fields ~= Property_tag_field.pervasive ~ " INTEGER";
             break;
@@ -432,7 +467,7 @@ int create_table(sqlite3* database, Table table) {
     "CREATE TABLE IF NOT EXISTS ", table,
     " ( ", definitions.join(" , "), " )");
 
-    writeln(query_string);
+    deebug_w(query_string);
     int create_code =
     sqlite3_exec(
         database,
@@ -462,7 +497,7 @@ int select(sqlite3* database, TableExpression table, string[] fields, string[] f
     " WHERE ",
     filter.join(" OR "));
 
-    writeln(query_string);
+    deebug_w(query_string);
     int prepare_code = sqlite3_prepare_v2(
         database,
         query_string.toStringz,
@@ -540,6 +575,9 @@ template Field(Table table, string field_enum_name, fields...) {
         "string full_name(", field_enum_name, " f) { return text(Table.", table, ", \".\", f); }" );
 }
 
+void deebug_w(string[] print ...) {
+    if(deebug) writeln(print);
+}
 
 
  /*
