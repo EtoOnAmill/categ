@@ -12,7 +12,7 @@ LIBGUILE_FLAG=`pkg-config --cflags guile-3.0` -shared -o $(OBJD)/guile_db.so -fP
 
 
 all : $(OBJ)
-	$(CC) `pkg-config guile-3.0 --libs` -o $(OBJD)/taggy $(OBJ)
+	$(CC) -o $(OBJD)/taggy $(OBJ) `pkg-config guile-3.0 --libs`
 
 $(OBJD)/taggy.o : $(SRCD)/taggy.c
 	$(CC) $(CFLAGS) $(OBJD)/taggy.o $(SRCD)/taggy.c
@@ -21,7 +21,7 @@ $(OBJD)/taggy.go : $(SRCD)/taggy.scm
 	$(GC) $(GFLAGS) $(OBJD)/taggy.go $(SRCD)/taggy.scm
 
 $(OBJD)/guile_db.so : $(SRCD)/guile_db.c
-	$(CC) $(LIBGUILE_FLAG) --debug $(SRCD)/guile_db.c
+	$(CC) $(LIBGUILE_FLAG) $(SRCD)/guile_db.c
 
 .PHONY : clean
 clean :
