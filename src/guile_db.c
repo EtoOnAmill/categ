@@ -4,6 +4,9 @@
 #include <stdlib.h>
 
 #define DEFAULT_SIZE 50
+#define DATABASE_NAME "~/.local/taggy/etonit.db" // TODO fetch it dynamically like in taggy.d
+
+sqlite3* database;
 
 
 char* concat(char* str1, char* str2) {
@@ -54,38 +57,60 @@ char* vec_to_seq(SCM vector) {
     return ret;
 }
 
+// arg is the 4th arg to sqlite3_exec
+// sqlite3_exec(db, query, callback, c_arg, err) -> callback(c_arg, -, -, -)
+int select_callback(SCM* accumulator, int col_n, char** col_vals, char** col_name) {
+    // make a SCM list for the row
+    // iterate columns backward
+        // row_list = (cons col_val row_list)
 
-SCM guiledb_add(SCM database, SCM row, SCM value) {
-    if( scm_vector_p(row) == SCM_BOOL_T && scm_vector_p(value) == SCM_BOOL_T ) {
-        if( scm_c_vector_length(row) != scm_c_vector_length(value) ) {
-            return SCM_BOOL_F;
-        }
-    } else {
-        return SCM_BOOL_F;
+    SCM row = scm_list_n(SCM_UNDEFINED); //should make the empty list
+
+    for(; col_n >= 0; col_n--) {
+        SCM col_str = scm_from_locale_string(col_vals[col_n]);
+
+        row = scm_cons(col_str, row);
     }
 
-    char* db_name = scm_to_locale_string(database);
+    *accumulator = scm_cons(row, *accumulator);
 
-    char* col_names = calloc(DEFAULT_SIZE,1);
-    append(&col_names, "(");
-    append(&col_names, vec_to_seq(row));
-    append(&col_names, ")");
 
-    char* values = calloc(DEFAULT_SIZE,1);
-    append(&values, "(");
-    append(&values, vec_to_seq(value));
-    append(&values, ")");
+    return 0; // 0 = ok, >0 = error
+}
 
-    char* query = calloc(DEFAULT_SIZE,1);
-    append(&query, "INSERT INTO ");
-    append(&query, db_name);
-    append(&query, col_names);
-    append(&query, " VALUES ");
-    append(&query, values);
+SCM guiledb_select(SCM query_str) {
+    SCM accumulator = scm_list_n(SCM_UNDEFINED);
 
-    return scm_from_locale_string(query);
+    int res = sqlite3_exec(
+        database, 
+        scm_to_locale_string(query_str), 
+        (int (*)(void*,int,char**,char**)) &select_callback, 
+        &accumulator, 
+        NULL);
+
+    if (res) {
+        return scm_from_int(res);
+    } else {
+        return accumulator;
+    }
+}
+
+SCM guiledb_query(SCM query_str) {
+    int res = sqlite3_exec(database, scm_to_locale_string(query_str), NULL, NULL, NULL);
+
+    if (res) {
+        return scm_from_int(res);
+    } else {
+        return SCM_BOOL_T;
+    }
 }
 
 void init_module() {
-    scm_c_define_gsubr("guiledb-add", 3, 0, 0, guiledb_add);
+    sqlite3_open_v2(
+        DATABASE_NAME,
+        &database,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+        NULL);
+    scm_c_define_gsubr("guiledb-query", 1, 0, 0, guiledb_query);
+    scm_c_define_gsubr("guiledb-select", 1, 0, 0, guiledb_select);
 }
