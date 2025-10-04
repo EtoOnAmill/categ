@@ -1,11 +1,7 @@
-(define-module (caria)
-    #:export (hi table-add table-remove table-select))
-
-(load-extension "./build/guile_db.so" "init_module")
+(define-module (categ)
+    #:export (hi table-add table-remove table-select setup-db teardown-db))
 
 (define hi (lambda () (display "BYE\n")))
-
-
 
 (define* (table-select table rows #:key join . filters)
     (let*
