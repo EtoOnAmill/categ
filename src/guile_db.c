@@ -50,7 +50,7 @@ int select_callback(SCM* accumulator, int col_n, char** col_vals, char** col_nam
 }
 
 SCM guiledb_select(SCM query_str) {
-    SCM accumulator = scm_list_n(SCM_BOOL_T, SCM_UNDEFINED); // the bool is to have something to cdr on the first iteration of the callback
+    SCM accumulator = scm_list_n(SCM_BOOL_F, SCM_UNDEFINED); // the bool is to have something to cdr on the first iteration of the callback
 
     int res = sqlite3_exec(
         database, 
@@ -61,6 +61,8 @@ SCM guiledb_select(SCM query_str) {
 
     if (res) {
         return scm_from_int(res);
+    } else if ( scm_car(accumulator) == SCM_BOOL_F ) {
+        return scm_list_n(SCM_UNDEFINED);
     } else {
         return accumulator;
     }
@@ -78,7 +80,14 @@ SCM guiledb_query(SCM query_str) {
 
 
 
-void make_scm_bindings(void) {
+void make_scm_bindings(void* _) {
     scm_c_define_gsubr("guiledb-query", 1, 0, 0, guiledb_query);
     scm_c_define_gsubr("guiledb-select", 1, 0, 0, guiledb_select);
+
+    scm_c_export("guiledb-query", NULL);
+    scm_c_export("guiledb-select", NULL);
+}
+
+void make_scm_module(void) {
+    scm_c_define_module("guiledb", make_scm_bindings, NULL);
 }
