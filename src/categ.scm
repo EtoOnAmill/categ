@@ -141,13 +141,42 @@
               accumulator
               (loop
                   (cdr vals)
-                  (cons (add-tag (car vals)) accumulator)))))))
+                  (cons (add-tag (car vals)) accumulator)))))
+     (('link l-er l-ed)
+      (let loop-er ((linkers l-er) (acc-er '()))
+          (let loop-ed ((linked l-ed) (acc-ed '()))
+              (cond
+                  ((and (pair? linkers) (pair? linked))
+                   (loop-ed
+                      (cdr linked)
+                      (cons (add-link (car linkers) (car linked)) acc-ed)))
+                  ((and (pair? linkers) (nil? linked))
+                      (loop-er (cdr linkers) (cons acc-ed acc-er)))
+
+                  ((and (nil? linkers) (pair? linked))
+                      acc-er)
+                  ((and (nil? linkers) (nil? linked))
+                      acc-er)
+
+                  ((and (pair? linkers) (string? linked))
+                   (process-query `(link ,linkers (,linked))))
+                  ((and (string? linkers) (pair? linked))
+                   (process-query `(link (,linkers) ,linked)))))))))
+    
+
+(define (add-link linker linked)
+    (table-add
+     "links"
+     #(linker_id linked_id)
+     (list (number->string (string-hash linker)) (number->string (string-hash linked)))))
     
 (define (add-tag val)
     (table-add
         "tags"
         #(name hash_id)
         (list val (number->string (string-hash val)))))
+    
+
     
 (define print-many (lambda a
     (if (not (nil? a))

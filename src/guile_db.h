@@ -3,8 +3,7 @@
 
 extern sqlite3* database;
 
-SCM guiledb_query(SCM);
-SCM guiledb_select(SCM);
+int all_tables_exist(void);
 void make_scm_bindings(void*);
 void make_scm_module(void);
 

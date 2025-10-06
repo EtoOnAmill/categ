@@ -158,6 +158,12 @@ int main(int argc, char** argv) {
         exit(DATABASE_ERROR);
     }
 
+    int table_res = all_tables_exist();
+    if( table_res ) {
+        fprintf(stderr, "Unable to create missing tables %s ; error:%d",db_name, table_res); 
+        exit(DATABASE_ERROR);
+    }
+
     struct InnerArgs inner_args = {
         .argc = argc,
         .argv = argv,

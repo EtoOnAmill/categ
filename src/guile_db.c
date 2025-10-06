@@ -10,6 +10,83 @@
 
 sqlite3* database;
 
+enum Tables {
+    TAGS,
+    LINKS,
+    T_SIZE,
+};
+
+int make_table(enum Tables t) {
+    char* query;
+    switch( t ) {
+        case TAGS:
+            query = 
+            "CREATE TABLE IF NOT EXISTS tags ( \
+                name TEXT, \
+                description TEXT, \
+                hash_id INTEGER PRIMARY KEY ON CONFLICT IGNORE )";
+            break;
+        case LINKS:
+            query =
+            "CREATE TABLE IF NOT EXISTS links ( \
+                linker_id INTEGER REFERENCES tags ( hash_id ) ON DELETE NO ACTION ON UPDATE CASCADE, \
+                linked_id INTEGER REFERENCES tags ( hash_id ) ON DELETE NO ACTION ON UPDATE CASCADE, \
+                UNIQUE( \"linker_id\", \"linked_id\" ) ON CONFLICT IGNORE )";
+            break;
+        default:
+            return ~0;
+    }
+    int res = sqlite3_exec(
+        database, 
+        query, 
+        NULL, 
+        NULL, 
+        NULL);
+    if( res ) return res;
+    else return 0;
+}
+
+char tables[T_SIZE] = {};
+int table_exists(void* _, int col_n, char** col_vals, char** col_names) {
+    // strcmp decides against all common sense that 0 is the return value when the strings are equal
+    if( strcmp(col_names[1], "name") ) {
+        return 1;
+    }
+
+    if( !strcmp(col_vals[1], "tags") ) {
+        tables[TAGS] = 'y';
+    } else if( !strcmp(col_vals[1], "links") ) {
+        tables[LINKS] = 'y';
+    } 
+    return 0;
+}
+
+int all_tables_exist() {
+    char* query = "PRAGMA table_list";
+
+check:
+    memset(tables, 'n', T_SIZE);
+    int res = sqlite3_exec(
+        database, 
+        query, 
+        &table_exists, 
+        NULL, 
+        NULL);
+
+    if( res ) return res;
+
+    for( int i=0; i<T_SIZE; i++ ) {
+        if( tables[i] == 'n' ) {
+            int make_res = make_table(i);
+            if( make_res ) return make_res;
+            goto check;
+        }
+        tables[i] = 'n';
+    }
+
+    return 0;
+}
+
 // arg is the 4th arg to sqlite3_exec
 // sqlite3_exec(db, query, callback, c_arg, err) -> callback(c_arg, -, -, -)
 int select_callback(SCM* accumulator, int col_n, char** col_vals, char** col_names) {
