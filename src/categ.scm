@@ -1,6 +1,17 @@
 (define-module (db-interface)
-    #:export (table-add table-remove table-select)
+    #:export (table-add table-remove table-select table-join)
     #:autoload (guiledb) (guiledb-query guiledb-select))
+
+(define (join_subquery table1 table2 join-constraint)
+    (if (and
+         (string? table1)
+         (string? table2)
+         (string? join-constraint))
+        (let (
+            (query (string-append table1 " JOIN " table2 " ON " join-constraint))
+        )
+            (begin (display query) query))))
+
 
 (define* (table-select table rows #:key join . filters)
     (let* (
@@ -161,8 +172,33 @@
                   ((and (pair? linkers) (string? linked))
                    (process-query `(link ,linkers (,linked))))
                   ((and (string? linkers) (pair? linked))
-                   (process-query `(link (,linkers) ,linked)))))))))
-    
+                   (process-query `(link (,linkers) ,linked)))
+                  ((and (string? linkers) (string? linked))
+                   (process-query `(link (,linkers) (,linked))))))))
+     (('get . filters)
+      (write (get-linked filters)))))
+
+
+(define (get-linked l-ers)
+    (let ((join-subq 
+             (join_subquery 
+              "tags"
+              "links"
+              "tags.hash_id=links.linked_id")))
+    (let loop ((linkers l-ers) (ret '()))
+        (if (nil? linkers)
+            ret
+            (loop
+             (cdr linkers)
+             (cons 
+              (cons 
+                   (car linkers)
+                   (cdr (table-select ; cdr because first value of select list is the column names which we don't care about
+                       join-subq
+                       #(tags.name)
+                       (string-append "\"linker_id\"=" (number->string (string-hash (car linkers)))))))
+              ret))))))
+
 
 (define (add-link linker linked)
     (table-add
