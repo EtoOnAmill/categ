@@ -176,12 +176,45 @@
                   ((and (string? linkers) (string? linked))
                    (process-query `(link (,linkers) (,linked))))))))
      (('get . filters)
-      (write (get-linked filters)))))
+      (display (get-linked filters)))))
 
+(define (filters->selectors filters)
+    (match (car filters)
+         ('and
+          (string-append "(" (h-filt->sel (cdr filters) "" " AND ") ")" ))
+         ('or
+          (string-append "(" (h-filt->sel (cdr filters) "" " OR ") ")" ))
+         ('not
+          (string-append "NOT (" (h-filt->sel (cdr filters) "" " OR ") ")" ))
+         (else
+          (string-append "(" (h-filt->sel filters "" " AND ") ")" ))))
+
+(define* (h-filt->sel filters #:optional (acc "") (join " AND "))
+    (let ((join-middle (if (eq? acc "") "" join)))
+    (if (nil? filters) acc
+    (if (string? (car filters))
+        (h-filt->sel
+         (cdr filters)
+         (string-append acc join-middle "\"linker_id\"=" (s-string-hash (car filters)))
+         join)
+    (if (symbol? (car filters))
+        (h-filt->sel
+         (cdr filters)
+         (string-append acc join-middle "\"linker_id\"=" (s-string-hash (symbol->string (car filters))))
+         join)
+    (if (keyword? (car filters))
+        (h-filt->sel
+         (cdr filters)
+         (string-append acc join-middle "\"hash_id\"=" (s-string-hash (symbol->string (keyword->symbol (car filters)))))
+         join)
+    (if (list? (car filters))
+     (h-filt->sel
+      (cdr filters)
+      (string-append acc join-middle (filters->selectors (car filters)))))))))))
 
 (define (get-linked l-ers)
-    (let ((join-subq 
-             (join_subquery 
+    (let ((join-subq
+             (join_subquery
               "tags"
               "links"
               "tags.hash_id=links.linked_id")))
@@ -196,7 +229,7 @@
                    (cdr (table-select ; cdr because first value of select list is the column names which we don't care about
                        join-subq
                        #(tags.name)
-                       (string-append "\"linker_id\"=" (number->string (string-hash (car linkers)))))))
+                       (string-append "\"linker_id\"=" (s-string-hash (car linkers))))))
               ret))))))
 
 
@@ -204,15 +237,17 @@
     (table-add
      "links"
      #(linker_id linked_id)
-     (list (number->string (string-hash linker)) (number->string (string-hash linked)))))
+     (list (s-string-hash linker) (s-string-hash linked))))
     
 (define (add-tag val)
     (table-add
         "tags"
         #(name hash_id)
-        (list val (number->string (string-hash val)))))
+        (list val (s-string-hash val))))
     
-
+(define (s-string-hash str) 
+    str)
+    ;(number->string (string-hash str)))
     
 (define print-many (lambda a
     (if (not (nil? a))
