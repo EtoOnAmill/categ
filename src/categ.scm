@@ -10,7 +10,7 @@
         (let (
             (query (string-append table1 " JOIN " table2 " ON " join-constraint))
         )
-            (begin (display query) query))))
+            (begin (display query) (display "\n") query))))
 
 
 (define* (table-select table rows #:key join . filters)
@@ -176,7 +176,7 @@
                   ((and (string? linkers) (string? linked))
                    (process-query `(link (,linkers) (,linked))))))))
      (('get . filters)
-      (display (get-linked filters)))))
+      (display (table-select filters)))))
 
 (define (filters->selectors filters)
     (match (car filters)
@@ -212,25 +212,17 @@
       (cdr filters)
       (string-append acc join-middle (filters->selectors (car filters)))))))))))
 
-(define (get-linked l-ers)
+(define (get-linked filters)
     (let ((join-subq
              (join_subquery
               "tags"
               "links"
-              "tags.hash_id=links.linked_id")))
-    (let loop ((linkers l-ers) (ret '()))
-        (if (nil? linkers)
-            ret
-            (loop
-             (cdr linkers)
-             (cons 
-              (cons 
-                   (car linkers)
-                   (cdr (table-select ; cdr because first value of select list is the column names which we don't care about
-                       join-subq
-                       #(tags.name)
-                       (string-append "\"linker_id\"=" (s-string-hash (car linkers))))))
-              ret))))))
+              "tags.hash_id=links.linked_id"))
+          (selectors (filters->selectors filters)))
+   (table-select 
+       join-subq
+       #(tags.name)
+       selectors)))
 
 
 (define (add-link linker linked)
@@ -246,8 +238,8 @@
         (list val (s-string-hash val))))
     
 (define (s-string-hash str) 
-    str)
-    ;(number->string (string-hash str)))
+;    str)
+    (number->string (string-hash str)))
     
 (define print-many (lambda a
     (if (not (nil? a))
